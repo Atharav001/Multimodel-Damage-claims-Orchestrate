@@ -1,11 +1,12 @@
 import json
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import pandas as pd
-from openai import OpenAI
+from openai import APIError, OpenAI, RateLimitError
 from tqdm import tqdm
 
 import data_loader
@@ -14,6 +15,7 @@ import vision_engine
 
 CACHE_PATH = ".cache.json"
 MAX_WORKERS = 3
+CACHE_FLUSH_INTERVAL = 5
 RETRY_WAITS = [2, 4, 8]
 
 OUTPUT_COLUMNS = [
@@ -33,6 +35,11 @@ OUTPUT_COLUMNS = [
     "severity",
 ]
 
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
+logger = logging.getLogger(__name__)
+
 
 def load_cache() -> dict[str, dict[str, Any]]:
     if os.path.exists(CACHE_PATH):
@@ -51,8 +58,9 @@ def call_with_retry(fn, *args, **kwargs):
     for wait in RETRY_WAITS:
         try:
             return fn(*args, **kwargs)
-        except Exception as e:
+        except (RateLimitError, APIError) as e:
             last_exc = e
+            logger.warning("API error (retry in %ss): %s", wait, e)
             time.sleep(wait)
     raise last_exc
 
@@ -63,23 +71,25 @@ def process_one_claim(
     evidence_reqs: pd.DataFrame,
     client: OpenAI,
     cache: dict[str, dict[str, Any]],
+    model_name: str,
 ) -> dict[str, Any]:
-    claim_id = str(row.name)
-    if claim_id in cache:
-        return cache[claim_id]
+    image_paths_raw = row["image_paths"]
+    cache_key = f"{row['user_id']}_{image_paths_raw}"
+    if cache_key in cache:
+        return cache[cache_key]
 
     ctx_list = data_loader.get_claim_context(row, user_history, evidence_reqs)
     ctx = ctx_list[0]
 
     def run_vision():
         return vision_engine.run_blind_perception(
-            ctx["claim_object"], ctx["image_paths"], client
+            ctx["claim_object"], ctx["image_paths"], client, model_name
         )
 
     blind_facts = call_with_retry(run_vision)
 
     def run_judge():
-        return judge_engine.run_adjudication(ctx, blind_facts, client)
+        return judge_engine.run_adjudication(ctx, blind_facts, client, model_name)
 
     judgement = call_with_retry(run_judge)
 
@@ -104,8 +114,7 @@ def process_one_claim(
         "severity": judgement.get("severity", "unknown"),
     }
 
-    cache[claim_id] = result
-    save_cache(cache)
+    cache[cache_key] = result
     return result
 
 
@@ -119,6 +128,7 @@ def main() -> None:
 
     claims, user_history, evidence_reqs = data_loader.load_data()
     results: list[dict[str, Any]] = []
+    processed_count = 0
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {}
@@ -130,6 +140,7 @@ def main() -> None:
                 evidence_reqs,
                 client,
                 cache,
+                model_name,
             )
             futures[future] = idx
 
@@ -138,8 +149,12 @@ def main() -> None:
                 try:
                     result = future.result()
                     results.append(result)
+                    processed_count += 1
+                    if processed_count % CACHE_FLUSH_INTERVAL == 0:
+                        save_cache(cache)
                 except Exception as e:
                     idx = futures[future]
+                    logger.error("Claim at row %d failed: %s", idx, e)
                     results.append(
                         {
                             "user_id": claims.at[idx, "user_id"],
@@ -163,6 +178,7 @@ def main() -> None:
                 finally:
                     pbar.update(1)
 
+    save_cache(cache)
     df = pd.DataFrame(results, columns=OUTPUT_COLUMNS)
     df.to_csv("output.csv", index=False, quoting=1)
     print(f"\nDone. {len(results)} claims written to output.csv")

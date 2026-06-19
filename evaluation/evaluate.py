@@ -1,4 +1,3 @@
-import os
 import sys
 from pathlib import Path
 
@@ -10,28 +9,32 @@ GROUND_TRUTH_PATH = ROOT / "claims" / "sample_claims.csv"
 PREDICTED_PATH = ROOT / "output_sample.csv"
 REPORT_PATH = Path(__file__).resolve().parent / "evaluation_report.md"
 
-TARGET_COLUMNS = ["claim_status", "issue_type", "object_part"]
+TARGET_COLUMNS = [
+    "claim_status",
+    "issue_type",
+    "object_part",
+    "severity",
+    "valid_image",
+]
 
 
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     gt = pd.read_csv(GROUND_TRUTH_PATH)
-    if PREDICTED_PATH.exists():
-        pred = pd.read_csv(PREDICTED_PATH)
-    else:
+    if not PREDICTED_PATH.exists():
         print(
-            f"Warning: {PREDICTED_PATH} not found. "
-            "Using ground truth as placeholder predictions.",
+            f"Error: {PREDICTED_PATH} not found. "
+            "Run main.py on sample_claims.csv first to generate predictions.",
             file=sys.stderr,
         )
-        pred = gt.copy()
+        sys.exit(1)
+    pred = pd.read_csv(PREDICTED_PATH)
     return gt, pred
 
 
-def compute_accuracy(
-    gt: pd.Series, pred: pd.Series
-) -> tuple[float, int, int]:
+def compute_accuracy(gt: pd.Series, pred: pd.Series) -> tuple[float, int, int]:
     mask = gt.notna() & pred.notna()
-    return accuracy_score(gt[mask], pred[mask]), mask.sum(), (mask != True).sum()
+    correct = (gt[mask] == pred[mask]).sum()
+    return accuracy_score(gt[mask], pred[mask]), correct, len(gt)
 
 
 def generate_report(

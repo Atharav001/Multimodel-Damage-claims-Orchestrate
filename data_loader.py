@@ -1,5 +1,8 @@
+import math
+
 import pandas as pd
 from typing import List, Dict
+
 
 CLAIMS_PATH = "claims/claims.csv"
 USER_HISTORY_PATH = "claims/user_history.csv"
@@ -30,11 +33,15 @@ def get_claim_context(
         | (evidence_reqs["claim_object"] == "all")
     ]
     evidence_rules = "\n".join(
-        f"- [{row["requirement_id"]}] ({row["applies_to"]}) {row["minimum_image_evidence"]}"
-        for _, row in matching_reqs.iterrows()
+        f"- [{req["requirement_id"]}] ({req["applies_to"]}) {req["minimum_image_evidence"]}"
+        for _, req in matching_reqs.iterrows()
     )
 
-    image_paths = str(row["image_paths"]).split(";")
+    raw_paths = row["image_paths"]
+    if isinstance(raw_paths, float) and math.isnan(raw_paths):
+        image_paths: List[str] = []
+    else:
+        image_paths = str(raw_paths).split(";")
 
     return [
         {

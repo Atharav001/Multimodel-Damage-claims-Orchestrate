@@ -1,6 +1,8 @@
 import base64
 import json
+import mimetypes
 from typing import List
+
 from openai import OpenAI
 
 
@@ -25,6 +27,7 @@ def run_blind_perception(
     claim_object: str,
     image_paths: List[str],
     client: OpenAI,
+    model_name: str = "gemini-1.5-flash",
 ) -> dict:
     content: list[dict] = [
         {
@@ -38,11 +41,14 @@ def run_blind_perception(
     for i, path in enumerate(image_paths, start=1):
         content.append({"type": "text", "text": f"Image ID: img_{i}"})
         b64 = encode_image(path)
+        mime_type, _ = mimetypes.guess_type(path)
+        if mime_type is None:
+            mime_type = "image/jpeg"
         content.append(
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/jpeg;base64,{b64}",
+                    "url": f"data:{mime_type};base64,{b64}",
                     "detail": "auto",
                 },
             }
@@ -50,16 +56,17 @@ def run_blind_perception(
 
     try:
         response = client.chat.completions.create(
-            model="gemini-1.5-flash",
+            model=model_name,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": content},
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
+            timeout=60,
         )
         return json.loads(response.choices[0].message.content)
-    except Exception:
+    except (json.JSONDecodeError, ValueError):
         return {
             "image_quality": "unknown",
             "visible_object": "unknown",

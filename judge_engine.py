@@ -1,5 +1,6 @@
 import json
 from typing import Any
+
 from openai import OpenAI
 
 
@@ -31,30 +32,32 @@ def run_adjudication(
     claim_context: dict[str, Any],
     blind_facts: dict[str, Any],
     client: OpenAI,
+    model_name: str = "gemini-1.5-flash",
 ) -> dict[str, Any]:
     user_prompt = (
         "Here is the blind visual analysis from the image inspector:\n"
         f"{json.dumps(blind_facts, indent=2)}\n\n"
         "Here is the user's claim text:\n"
-        f"{claim_context['user_claim']}\n\n"
+        f"{claim_context.get('user_claim', '')}\n\n"
         "Here is the user's claim history summary:\n"
-        f"{claim_context['history_summary']}\n\n"
+        f"{claim_context.get('history_summary', '')}\n\n"
         "Here are the applicable evidence rules:\n"
-        f"{claim_context['evidence_rules']}"
+        f"{claim_context.get('evidence_rules', '')}"
     )
 
     try:
         response = client.chat.completions.create(
-            model="gemini-1.5-flash",
+            model=model_name,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
+            timeout=60,
         )
         return json.loads(response.choices[0].message.content)
-    except Exception:
+    except (json.JSONDecodeError, ValueError):
         return {
             "evidence_standard_met": "false",
             "evidence_standard_met_reason": "Adjudication engine failed to produce a response",
